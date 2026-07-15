@@ -15,7 +15,7 @@
 将工程克隆至 `catkin_ws/src` 目录下：
 
 ```bash
-git clone https://github.com/hslu-c2a/twincat_talker.git
+git clone https://github.com/tom90666111-cyber/hand_datalogger.git
 ```
 
 构建工程：
