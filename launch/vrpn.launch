@@ -1,0 +1,11 @@
+<launch>
+  <node pkg="vrpn_client_ros" type="vrpn_client_node" name="vrpn_client">
+    <param name="server"           value="127.0.0.1"/>
+    <param name="port"             value="3883"/>
+    <param name="frame_id"         value="world"/>
+    <!-- <param name="update_frequency" value="120.0"/> -->
+    <rosparam param="trackers">
+      - RigidBody 1
+    </rosparam>
+  </node>
+</launch>

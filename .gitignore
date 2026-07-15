@@ -1,4 +1,38 @@
-build/*
-*.vscode
-*.idea
-__pycache__
+# macOS
+.DS_Store
+
+# ROS/catkin build outputs
+build/
+devel/
+install/
+logs/
+.catkin_tools/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# C/C++ build artifacts
+*.o
+*.a
+*.so
+
+# ROS runtime recordings and logs
+*.bag
+*.bag.active
+*.log
+
+# Duplicate archives of text data directories
+src/JointAngleData.zip
+src/JointAngleData/**/*.zip

@@ -1,0 +1,18 @@
+<launch>
+  <!-- VRPN 客户端 -->
+  <include file="$(find twincat_talker)/launch/vrpn.launch"/>
+
+  <!-- TwinCAT ADS 读取节点 -->
+  <node pkg="twincat_talker" type="twincat_node"
+        name="twincat_node" output="screen"/>
+
+  <!-- <node pkg="twincat_talker" type="TCwrite"
+        name="TCwrite" output="screen"/> -->
+
+  <!-- OptiTrack 转发节点 -->
+  <node pkg="twincat_talker" type="optitrack_node"
+        name="optitrack_node" output="screen"/>
+
+  <!-- <node pkg="twincat_talker" type="data_logger"
+        name="data_logger" output="screen"/> -->
+</launch>
