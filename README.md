@@ -221,3 +221,62 @@ variable_to_write = 12.0;
 #### `main_bk.cc`
 - **用途**：`main.cc` 的历史备份版本
 - **功能**：每 10 秒向 `MAIN.myFloatVAR` 写入固定值 12.0 的简单演示，连接至 `172.17.64.1`
+
+## 单次轨迹自动采集（实验功能）
+
+`single_experiment_manager` 可以根据少量参数生成一段单轴轨迹，并按顺序完成安全校验、可选 ADS 上传、可选 PLC 触发以及 OptiTrack/关节角同步记录。
+
+### 默认安全模式
+
+以下命令只生成和校验轨迹，不建立 ADS 连接：
+
+```bash
+roslaunch twincat_talker single_experiment.launch \
+  waveform:=sine \
+  frequency_hz:=0.5 \
+  amplitude:=1.0 \
+  offset:=10.0 \
+  duration_s:=10.0 \
+  sample_rate_hz:=200.0
+```
+
+输出默认位于：
+
+```text
+~/.ros/hand_datalogger/<时间戳>_<实验名>/
+```
+
+包含生成轨迹、实际参数、运行日志和结果文件。
+
+### 上传但不触发运动
+
+上传前必须明确提供安全限位：
+
+```bash
+roslaunch twincat_talker single_experiment.launch \
+  waveform:=sine frequency_hz:=0.5 amplitude:=1.0 offset:=10.0 \
+  duration_s:=10.0 sample_rate_hz:=200.0 target_axis:=12 \
+  limits_enabled:=true minimum_value:=8.0 maximum_value:=12.0 maximum_step:=0.1 \
+  upload_to_plc:=true trigger_motion:=false
+```
+
+该模式会写入 PLC 轨迹数组，但不会写入 `CurrentJob=114`。
+
+### 完整自动实验
+
+实机短轨迹验证完成后，才允许额外设置：
+
+```text
+start_pipeline:=true
+trigger_motion:=true
+```
+
+管理节点只有在收到同步的 `/optitrack/pose1` 和 `/twincat/joint_states` 后才会触发。确认 `CurrentJob==114` 后持续记录，连续检测到 `CurrentJob!=114` 后结束，并在结束前后记录可配置的 pre-roll/post-roll 数据。
+
+详细参数、安全限制和分级验收流程见：
+
+```text
+docs/SINGLE_EXPERIMENT_WORKFLOW.md
+docs/SINGLE_EXPERIMENT_IMPLEMENTATION_PLAN.md
+docs/HARDWARE_SAFETY_POLICY.md
+```
