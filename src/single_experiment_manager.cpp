@@ -231,6 +231,8 @@ public:
           joint_indices_(joint_indices),
           flush_interval_(flush_interval),
           ready_(false),
+          write_failed_(false),
+          last_sync_wall_time_s_(0.0),
           recording_(false),
           state_("WAITING_FOR_DATA"),
           current_job_(0),
@@ -253,6 +255,15 @@ public:
     ~SynchronizedRecorder() { stop(); }
 
     bool ready() const { return ready_.load(); }
+
+    bool writeFailed() const { return write_failed_.load(); }
+
+    bool dataStale(double timeout_s) const {
+        if (!ready_.load()) {
+            return true;
+        }
+        return ros::WallTime::now().toSec() - last_sync_wall_time_s_.load() > timeout_s;
+    }
 
     void start(const std::string& path) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -316,6 +327,7 @@ private:
             return;
         }
 
+        last_sync_wall_time_s_.store(ros::WallTime::now().toSec());
         ready_.store(true);
         std::lock_guard<std::mutex> lock(mutex_);
         if (!recording_ || !output_.is_open()) {
@@ -341,6 +353,11 @@ private:
         if (row_count_ % static_cast<std::size_t>(flush_interval_) == 0) {
             output_.flush();
         }
+        if (!output_.good()) {
+            write_failed_.store(true);
+            recording_ = false;
+            ROS_ERROR("Recorded data output stream failed; logging has been disabled");
+        }
     }
 
     message_filters::Subscriber<geometry_msgs::PoseStamped> pose_subscriber_;
@@ -350,6 +367,8 @@ private:
     std::vector<int> joint_indices_;
     int flush_interval_;
     std::atomic<bool> ready_;
+    std::atomic<bool> write_failed_;
+    std::atomic<double> last_sync_wall_time_s_;
     mutable std::mutex mutex_;
     std::ofstream output_;
     bool recording_;
@@ -361,13 +380,27 @@ private:
     double maximum_sync_error_s_;
 };
 
-bool waitForDuration(double duration_s) {
+void requireRecorderHealthy(const SynchronizedRecorder& recorder,
+                            double data_stale_timeout_s) {
+    if (recorder.writeFailed()) {
+        throw std::runtime_error("recorded data output stream failed");
+    }
+    if (recorder.dataStale(data_stale_timeout_s)) {
+        throw std::runtime_error("synchronized input data became stale");
+    }
+}
+
+bool waitForDuration(double duration_s,
+                     const SynchronizedRecorder& recorder,
+                     double data_stale_timeout_s) {
     if (duration_s <= 0.0) {
+        requireRecorderHealthy(recorder, data_stale_timeout_s);
         return ros::ok();
     }
     const ros::WallTime deadline = ros::WallTime::now() + ros::WallDuration(duration_s);
     ros::WallRate rate(100.0);
     while (ros::ok() && ros::WallTime::now() < deadline) {
+        requireRecorderHealthy(recorder, data_stale_timeout_s);
         rate.sleep();
     }
     return ros::ok();
@@ -552,6 +585,7 @@ int main(int argc, char** argv) {
         int flush_interval = 100;
         double sync_tolerance_s = 0.02;
         double data_ready_timeout_s = 10.0;
+        double data_stale_timeout_s = 1.0;
         double pre_roll_s = 2.0;
         double post_roll_s = 2.0;
         double current_job_poll_rate_hz = 50.0;
@@ -566,6 +600,9 @@ int main(int argc, char** argv) {
         private_node.param("logging/data_ready_timeout_s",
                            data_ready_timeout_s,
                            data_ready_timeout_s);
+        private_node.param("logging/data_stale_timeout_s",
+                           data_stale_timeout_s,
+                           data_stale_timeout_s);
         private_node.param("logging/flush_interval", flush_interval, flush_interval);
         private_node.param("execution/pre_roll_s", pre_roll_s, pre_roll_s);
         private_node.param("execution/post_roll_s", post_roll_s, post_roll_s);
@@ -581,7 +618,8 @@ int main(int argc, char** argv) {
                            completion_debounce_count);
 
         if (subscriber_queue_size <= 0 || sync_queue_size <= 0 ||
-            data_ready_timeout_s <= 0.0 || current_job_poll_rate_hz <= 0.0 ||
+            data_ready_timeout_s <= 0.0 || data_stale_timeout_s <= 0.0 ||
+            current_job_poll_rate_hz <= 0.0 ||
             start_timeout_s <= 0.0 || maximum_runtime_s <= 0.0 ||
             completion_debounce_count <= 0 || pre_roll_s < 0.0 || post_roll_s < 0.0) {
             throw std::invalid_argument("logging or execution timing parameters are invalid");
@@ -614,7 +652,7 @@ int main(int argc, char** argv) {
         recorder->setState("PRE_ROLL");
         recorder->setCurrentJob(uploader.readCurrentJob());
         runtime_log.write("PRE_ROLL recording started");
-        if (!waitForDuration(pre_roll_s)) {
+        if (!waitForDuration(pre_roll_s, *recorder, data_stale_timeout_s)) {
             throw std::runtime_error("ROS shutdown during pre-roll");
         }
 
@@ -634,6 +672,7 @@ int main(int argc, char** argv) {
         bool completed = false;
 
         while (ros::ok() && ros::WallTime::now() < runtime_deadline) {
+            requireRecorderHealthy(*recorder, data_stale_timeout_s);
             const std::int16_t current_job = uploader.readCurrentJob();
             result.final_current_job = current_job;
             recorder->setCurrentJob(current_job);
@@ -654,13 +693,16 @@ int main(int argc, char** argv) {
 
         result.running_confirmed = current_job_monitor.runningConfirmed();
         if (!completed) {
+            if (!ros::ok()) {
+                throw std::runtime_error("ROS shutdown before the trajectory completed");
+            }
             throw std::runtime_error(
                 "maximum runtime exceeded while CurrentJob remained active");
         }
 
         recorder->setState("POST_ROLL");
         runtime_log.write("POST_ROLL started after CurrentJob changed from 114");
-        if (!waitForDuration(post_roll_s)) {
+        if (!waitForDuration(post_roll_s, *recorder, data_stale_timeout_s)) {
             throw std::runtime_error("ROS shutdown during post-roll");
         }
 

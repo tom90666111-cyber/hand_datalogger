@@ -49,6 +49,7 @@ logging:
   sync_queue_size: 50
   sync_tolerance_s: 0.02
   data_ready_timeout_s: 10.0
+  data_stale_timeout_s: 1.0
   flush_interval: 100
   joint_indices: [0, 1]
 
