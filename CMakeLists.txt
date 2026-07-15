@@ -13,12 +13,31 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 catkin_package(
-    CATKIN_DEPENDS roscpp sensor_msgs serial
+    INCLUDE_DIRS include
+    LIBRARIES trajectory_generator trajectory_uploader
+    CATKIN_DEPENDS roscpp std_msgs sensor_msgs geometry_msgs message_filters serial
 )
 
 add_subdirectory(dep/ADS)
 
-include_directories(dep/ADS/AdsLib dep/ADS/AdsLibOOI ${catkin_INCLUDE_DIRS})
+include_directories(
+  include
+  dep/ADS/AdsLib
+  dep/ADS/AdsLibOOI
+  ${catkin_INCLUDE_DIRS}
+)
+
+add_library(trajectory_generator
+  src/lib/trajectory_generator.cpp
+)
+
+add_library(trajectory_uploader
+  src/lib/trajectory_uploader.cpp
+)
+target_link_libraries(trajectory_uploader
+  libadscxx
+  ${catkin_LIBRARIES}
+)
 
 add_executable(twincat_talker src/main.cc)
 
@@ -55,13 +74,46 @@ target_link_libraries(optitrack_node
 add_executable(data_logger src/data_logger.cpp)
 target_link_libraries(data_logger ${catkin_LIBRARIES})
 
+add_executable(single_experiment_manager src/single_experiment_manager.cpp)
+target_link_libraries(single_experiment_manager
+  trajectory_generator
+  trajectory_uploader
+  libadscxx
+  ${catkin_LIBRARIES}
+)
+
 add_executable(sensor_read_five_tips src/sensor_read_five_tips.cpp)
 target_link_libraries(sensor_read_five_tips
   ${catkin_LIBRARIES}
 )
 
-install(TARGETS twincat_talker
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_gtest(test_trajectory_generator test/test_trajectory_generator.cpp)
+  if(TARGET test_trajectory_generator)
+    target_link_libraries(test_trajectory_generator trajectory_generator)
+  endif()
+
+  catkin_add_gtest(test_current_job_monitor test/test_current_job_monitor.cpp)
+endif()
+
+install(TARGETS
+   twincat_talker
+   twincat_node
+   optitrack_node
+   data_logger
+   trajectory_file_writer
+   single_experiment_manager
+   trajectory_generator
+   trajectory_uploader
    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION}
+)
+
+install(DIRECTORY launch config
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )

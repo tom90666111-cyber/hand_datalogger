@@ -1,0 +1,51 @@
+<launch>
+  <!-- Safe defaults never connect to ADS or trigger motion. -->
+  <arg name="start_pipeline" default="false"/>
+  <arg name="waveform" default="sine"/>
+  <arg name="frequency_hz" default="0.5"/>
+  <arg name="amplitude" default="1.0"/>
+  <arg name="offset" default="0.0"/>
+  <arg name="phase_rad" default="0.0"/>
+  <arg name="duration_s" default="10.0"/>
+  <arg name="sample_rate_hz" default="200.0"/>
+  <arg name="target_axis" default="12"/>
+  <arg name="limits_enabled" default="false"/>
+  <arg name="minimum_value" default="0.0"/>
+  <arg name="maximum_value" default="0.0"/>
+  <arg name="maximum_step" default="0.0"/>
+  <arg name="upload_to_plc" default="false"/>
+  <arg name="trigger_motion" default="false"/>
+  <arg name="experiment_name" default="single_experiment"/>
+  <arg name="output_root" default="$(env HOME)/.ros/hand_datalogger"/>
+
+  <include if="$(arg start_pipeline)"
+           file="$(find twincat_talker)/launch/robot.launch"/>
+
+  <node pkg="twincat_talker"
+        type="single_experiment_manager"
+        name="single_experiment_manager"
+        output="screen"
+        required="true">
+    <rosparam command="load"
+              file="$(find twincat_talker)/config/single_experiment.yaml"/>
+
+    <param name="trajectory/waveform" value="$(arg waveform)"/>
+    <param name="trajectory/frequency_hz" value="$(arg frequency_hz)"/>
+    <param name="trajectory/amplitude" value="$(arg amplitude)"/>
+    <param name="trajectory/offset" value="$(arg offset)"/>
+    <param name="trajectory/phase_rad" value="$(arg phase_rad)"/>
+    <param name="trajectory/duration_s" value="$(arg duration_s)"/>
+    <param name="trajectory/sample_rate_hz" value="$(arg sample_rate_hz)"/>
+    <param name="trajectory/target_axis" value="$(arg target_axis)"/>
+
+    <param name="safety/limits_enabled" value="$(arg limits_enabled)"/>
+    <param name="safety/minimum_value" value="$(arg minimum_value)"/>
+    <param name="safety/maximum_value" value="$(arg maximum_value)"/>
+    <param name="safety/maximum_step" value="$(arg maximum_step)"/>
+
+    <param name="execution/upload_to_plc" value="$(arg upload_to_plc)"/>
+    <param name="execution/trigger_motion" value="$(arg trigger_motion)"/>
+    <param name="output/experiment_name" value="$(arg experiment_name)"/>
+    <param name="output/root_directory" value="$(arg output_root)"/>
+  </node>
+</launch>
