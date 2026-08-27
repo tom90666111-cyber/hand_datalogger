@@ -14,7 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 catkin_package(
     INCLUDE_DIRS include
-    LIBRARIES trajectory_generator trajectory_uploader
+    LIBRARIES trajectory_generator trajectory_uploader hand_streamer
     CATKIN_DEPENDS roscpp std_msgs sensor_msgs geometry_msgs message_filters serial
 )
 
@@ -35,6 +35,14 @@ add_library(trajectory_uploader
   src/lib/trajectory_uploader.cpp
 )
 target_link_libraries(trajectory_uploader
+  libadscxx
+  ${catkin_LIBRARIES}
+)
+
+add_library(hand_streamer
+  src/lib/hand_streamer.cpp
+)
+target_link_libraries(hand_streamer
   libadscxx
   ${catkin_LIBRARIES}
 )
@@ -78,6 +86,7 @@ add_executable(single_experiment_manager src/single_experiment_manager.cpp)
 target_link_libraries(single_experiment_manager
   trajectory_generator
   trajectory_uploader
+  hand_streamer
   libadscxx
   ${catkin_LIBRARIES}
 )
@@ -105,6 +114,7 @@ install(TARGETS
    single_experiment_manager
    trajectory_generator
    trajectory_uploader
+   hand_streamer
    ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
    LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
