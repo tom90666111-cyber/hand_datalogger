@@ -90,11 +90,6 @@ target_link_libraries(single_experiment_manager
   ${catkin_LIBRARIES}
 )
 
-add_executable(sensor_read_five_tips src/sensor_read_five_tips.cpp)
-target_link_libraries(sensor_read_five_tips
-  ${catkin_LIBRARIES}
-)
-
 if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_trajectory_generator test/test_trajectory_generator.cpp)
   if(TARGET test_trajectory_generator)
