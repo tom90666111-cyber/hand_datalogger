@@ -6,11 +6,13 @@ trajectory:
   phase_rad: 0.0
   duration_s: 10.0
   sample_rate_hz: 200.0
-  target_axis: 12
+  # Excited hand channel (0-15); all other channels hold the current PLC value.
+  target_joint: 0
   max_points: 60001
 
 safety:
-  # PLC upload is rejected unless this is explicitly enabled with valid limits.
+  # PLC streaming is rejected unless this is explicitly enabled with valid
+  # limits. Limit units are MAIN.ROS_A hand target values.
   limits_enabled: false
   minimum_value: 0.0
   maximum_value: 0.0
@@ -18,26 +20,26 @@ safety:
 
 execution:
   # Safe defaults: generate and validate only; do not connect to ADS.
-  upload_to_plc: false
-  trigger_motion: false
-  trigger_job: 114
-  current_job_poll_rate_hz: 50.0
-  completion_debounce_count: 3
-  start_timeout_s: 5.0
+  # stream_to_plc=true performs real-time writes to MAIN.ROS_A (motion!).
+  stream_to_plc: false
+  write_rate_hz: 50.0
+  ros_control: true
+  stream_job: 210
   maximum_runtime_s: 600.0
   pre_roll_s: 2.0
   post_roll_s: 2.0
 
+# ADS addresses are intentionally empty: provide them explicitly on the
+# command line once the PLC address has been confirmed.
 ads:
-  remote_ip: 192.168.203.111
-  remote_ams_net_id: 127.0.0.1.2.2
-  local_ams_net_id: 192.168.10.1.1.3
+  remote_ip: ""
+  remote_ams_net_id: ""
+  local_ams_net_id: ""
   port: 851
 
 plc_variables:
-  current_position: VariableMAIN.CurrentPositionReal
-  trajectory_data: MyTRAJ.database_read_LREAL2
-  trajectory_size: MyTRAJ.SIZE_POS_TRAJ
+  ros_control: MAIN.ROSControl
+  hand_targets: MAIN.ROS_A
   current_job: VariableMAIN.CurrentJob
 
 topics:

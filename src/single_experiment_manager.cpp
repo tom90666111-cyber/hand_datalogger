@@ -1,6 +1,5 @@
-#include "twincat_talker/current_job_monitor.hpp"
+#include "twincat_talker/hand_streamer.hpp"
 #include "twincat_talker/trajectory_generator.hpp"
-#include "twincat_talker/trajectory_uploader.hpp"
 
 #include <boost/bind.hpp>
 #include <geometry_msgs/PoseStamped.h>
@@ -119,11 +118,11 @@ std::string createUniqueExperimentDirectory(const std::string& root,
 
 void writeExperimentYaml(const std::string& path,
                          const TrajectoryParameters& trajectory,
-                         int target_axis,
-                         bool upload_to_plc,
-                         bool trigger_motion,
-                         std::int16_t trigger_job,
-                         const AdsTrajectoryConfiguration& ads) {
+                         int target_joint,
+                         bool stream_to_plc,
+                         double write_rate_hz,
+                         bool ros_control_enabled,
+                         const AdsHandConfiguration& ads) {
     std::ofstream output(path.c_str(), std::ios::out | std::ios::trunc);
     if (!output.is_open()) {
         throw std::runtime_error("cannot write experiment metadata: " + path);
@@ -137,16 +136,17 @@ void writeExperimentYaml(const std::string& path,
     output << "  phase_rad: " << trajectory.phase_rad << '\n';
     output << "  duration_s: " << trajectory.duration_s << '\n';
     output << "  sample_rate_hz: " << trajectory.sample_rate_hz << '\n';
-    output << "  target_axis: " << target_axis << '\n';
+    output << "  target_joint: " << target_joint << '\n';
     output << "safety:\n";
     output << "  limits_enabled: " << trajectory.limits_enabled << '\n';
     output << "  minimum_value: " << trajectory.minimum_value << '\n';
     output << "  maximum_value: " << trajectory.maximum_value << '\n';
     output << "  maximum_step: " << trajectory.maximum_step << '\n';
     output << "execution:\n";
-    output << "  upload_to_plc: " << upload_to_plc << '\n';
-    output << "  trigger_motion: " << trigger_motion << '\n';
-    output << "  trigger_job: " << trigger_job << '\n';
+    output << "  stream_to_plc: " << stream_to_plc << '\n';
+    output << "  write_rate_hz: " << write_rate_hz << '\n';
+    output << "  ros_control: " << ros_control_enabled << '\n';
+    output << "  stream_job: " << ads.stream_job << '\n';
     output << "ads:\n";
     output << "  remote_ip: \"" << ads.remote_ip << "\"\n";
     output << "  remote_ams_net_id: \"" << ads.remote_ams_net_id << "\"\n";
@@ -158,18 +158,16 @@ struct ExperimentResult {
     std::string status;
     std::string failure_reason;
     std::size_t generated_points;
-    std::uint32_t uploaded_last_index;
+    std::size_t written_points;
     std::size_t recorded_rows;
-    bool running_confirmed;
     std::int16_t final_current_job;
     double maximum_sync_error_s;
 
     ExperimentResult()
         : status("failed"),
           generated_points(0),
-          uploaded_last_index(0),
+          written_points(0),
           recorded_rows(0),
-          running_confirmed(false),
           final_current_job(0),
           maximum_sync_error_s(0.0) {}
 };
@@ -184,9 +182,8 @@ void writeResultYaml(const std::string& path, const ExperimentResult& result) {
     output << "status: \"" << result.status << "\"\n";
     output << "failure_reason: \"" << result.failure_reason << "\"\n";
     output << "generated_points: " << result.generated_points << '\n';
-    output << "uploaded_last_index: " << result.uploaded_last_index << '\n';
+    output << "written_points: " << result.written_points << '\n';
     output << "recorded_rows: " << result.recorded_rows << '\n';
-    output << "running_confirmed: " << result.running_confirmed << '\n';
     output << "final_current_job: " << result.final_current_job << '\n';
     output << "maximum_sync_error_s: " << result.maximum_sync_error_s << '\n';
 }
@@ -237,6 +234,8 @@ public:
           state_("WAITING_FOR_DATA"),
           current_job_(0),
           trigger_time_valid_(false),
+          command_target_valid_(false),
+          command_target_(std::numeric_limits<double>::quiet_NaN()),
           row_count_(0),
           maximum_sync_error_s_(0.0) {
         if (sync_tolerance_s_ <= 0.0) {
@@ -272,7 +271,8 @@ public:
             throw std::runtime_error("cannot open recorded data file: " + path);
         }
         output_ << "record_index,record_time,pose_time,joint_time,sync_error,"
-                   "experiment_elapsed,experiment_state,current_job,x,y,z,qx,qy,qz,qw,mcp,pip\n";
+                   "experiment_elapsed,experiment_state,current_job,x,y,z,qx,qy,qz,qw,"
+                   "mcp,pip,cmd_target\n";
         recording_ = true;
     }
 
@@ -293,6 +293,12 @@ public:
     void setCurrentJob(std::int16_t current_job) {
         std::lock_guard<std::mutex> lock(mutex_);
         current_job_ = current_job;
+    }
+
+    void setCommandTarget(double command_target) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        command_target_ = command_target;
+        command_target_valid_ = true;
     }
 
     void setTriggerTime(const ros::Time& trigger_time) {
@@ -347,7 +353,10 @@ private:
                 << pose->pose.position.y << ',' << pose->pose.position.z << ','
                 << pose->pose.orientation.x << ',' << pose->pose.orientation.y << ','
                 << pose->pose.orientation.z << ',' << pose->pose.orientation.w << ','
-                << joint->position[first_index] << ',' << joint->position[second_index] << '\n';
+                << joint->position[first_index] << ',' << joint->position[second_index] << ','
+                << (command_target_valid_ ? command_target_
+                                          : std::numeric_limits<double>::quiet_NaN())
+                << '\n';
 
         ++row_count_;
         if (row_count_ % static_cast<std::size_t>(flush_interval_) == 0) {
@@ -376,6 +385,8 @@ private:
     std::int16_t current_job_;
     ros::Time trigger_time_;
     bool trigger_time_valid_;
+    bool command_target_valid_;
+    double command_target_;
     std::size_t row_count_;
     double maximum_sync_error_s_;
 };
@@ -417,11 +428,11 @@ bool waitForRecorderReady(const SynchronizedRecorder& recorder, double timeout_s
 
 void loadParameters(ros::NodeHandle& node,
                     TrajectoryParameters& trajectory,
-                    int& target_axis,
-                    bool& upload_to_plc,
-                    bool& trigger_motion,
-                    std::int16_t& trigger_job,
-                    AdsTrajectoryConfiguration& ads) {
+                    int& target_joint,
+                    bool& stream_to_plc,
+                    double& write_rate_hz,
+                    bool& ros_control_enabled,
+                    AdsHandConfiguration& ads) {
     node.param<std::string>("trajectory/waveform", trajectory.waveform, trajectory.waveform);
     node.param("trajectory/frequency_hz", trajectory.frequency_hz, trajectory.frequency_hz);
     node.param("trajectory/amplitude", trajectory.amplitude, trajectory.amplitude);
@@ -430,7 +441,7 @@ void loadParameters(ros::NodeHandle& node,
     node.param("trajectory/duration_s", trajectory.duration_s, trajectory.duration_s);
     node.param("trajectory/sample_rate_hz", trajectory.sample_rate_hz,
                trajectory.sample_rate_hz);
-    node.param("trajectory/target_axis", target_axis, 12);
+    node.param("trajectory/target_joint", target_joint, 0);
 
     int max_points = static_cast<int>(trajectory.max_points);
     node.param("trajectory/max_points", max_points, max_points);
@@ -444,15 +455,16 @@ void loadParameters(ros::NodeHandle& node,
     node.param("safety/maximum_value", trajectory.maximum_value, 0.0);
     node.param("safety/maximum_step", trajectory.maximum_step, 0.0);
 
-    node.param("execution/upload_to_plc", upload_to_plc, false);
-    node.param("execution/trigger_motion", trigger_motion, false);
-    int trigger_job_value = 114;
-    node.param("execution/trigger_job", trigger_job_value, 114);
-    if (trigger_job_value < std::numeric_limits<std::int16_t>::min() ||
-        trigger_job_value > std::numeric_limits<std::int16_t>::max()) {
-        throw std::invalid_argument("execution/trigger_job is outside int16 range");
+    node.param("execution/stream_to_plc", stream_to_plc, false);
+    node.param("execution/write_rate_hz", write_rate_hz, 50.0);
+    node.param("execution/ros_control", ros_control_enabled, true);
+    int stream_job_value = ads.stream_job;
+    node.param("execution/stream_job", stream_job_value, stream_job_value);
+    if (stream_job_value < std::numeric_limits<std::int16_t>::min() ||
+        stream_job_value > std::numeric_limits<std::int16_t>::max()) {
+        throw std::invalid_argument("execution/stream_job is outside int16 range");
     }
-    trigger_job = static_cast<std::int16_t>(trigger_job_value);
+    ads.stream_job = static_cast<std::int16_t>(stream_job_value);
 
     node.param<std::string>("ads/remote_ip", ads.remote_ip, ads.remote_ip);
     node.param<std::string>("ads/remote_ams_net_id", ads.remote_ams_net_id,
@@ -466,15 +478,12 @@ void loadParameters(ros::NodeHandle& node,
     }
     ads.port = static_cast<std::uint16_t>(ads_port);
 
-    node.param<std::string>("plc_variables/current_position",
-                            ads.current_position_variable,
-                            ads.current_position_variable);
-    node.param<std::string>("plc_variables/trajectory_data",
-                            ads.trajectory_data_variable,
-                            ads.trajectory_data_variable);
-    node.param<std::string>("plc_variables/trajectory_size",
-                            ads.trajectory_size_variable,
-                            ads.trajectory_size_variable);
+    node.param<std::string>("plc_variables/ros_control",
+                            ads.ros_control_variable,
+                            ads.ros_control_variable);
+    node.param<std::string>("plc_variables/hand_targets",
+                            ads.hand_targets_variable,
+                            ads.hand_targets_variable);
     node.param<std::string>("plc_variables/current_job",
                             ads.current_job_variable,
                             ads.current_job_variable);
@@ -496,28 +505,27 @@ int main(int argc, char** argv) {
 
     try {
         TrajectoryParameters trajectory_parameters;
-        AdsTrajectoryConfiguration ads_configuration;
-        int target_axis = 12;
-        bool upload_to_plc = false;
-        bool trigger_motion = false;
-        std::int16_t trigger_job = 114;
+        AdsHandConfiguration ads_configuration;
+        int target_joint = 0;
+        bool stream_to_plc = false;
+        double write_rate_hz = 50.0;
+        bool ros_control_enabled = true;
         loadParameters(private_node,
                        trajectory_parameters,
-                       target_axis,
-                       upload_to_plc,
-                       trigger_motion,
-                       trigger_job,
+                       target_joint,
+                       stream_to_plc,
+                       write_rate_hz,
+                       ros_control_enabled,
                        ads_configuration);
 
-        if (target_axis < 0 || target_axis >= static_cast<int>(kPlcAxisCount)) {
-            throw std::invalid_argument("trajectory/target_axis must be between 0 and 15");
+        if (target_joint < 0 || target_joint >= static_cast<int>(kHandChannelCount)) {
+            throw std::invalid_argument("trajectory/target_joint must be between 0 and 15");
         }
-        if (trigger_motion && !upload_to_plc) {
-            throw std::invalid_argument(
-                "trigger_motion requires upload_to_plc to be enabled");
+        if (write_rate_hz <= 0.0) {
+            throw std::invalid_argument("execution/write_rate_hz must be greater than zero");
         }
-        if (upload_to_plc && !trajectory_parameters.limits_enabled) {
-            throw std::invalid_argument("PLC upload requires safety/limits_enabled=true");
+        if (stream_to_plc && !trajectory_parameters.limits_enabled) {
+            throw std::invalid_argument("PLC streaming requires safety/limits_enabled=true");
         }
 
         std::string output_root;
@@ -540,14 +548,14 @@ int main(int argc, char** argv) {
                                       trajectory);
         writeExperimentYaml(experiment_directory + "/experiment.yaml",
                             trajectory_parameters,
-                            target_axis,
-                            upload_to_plc,
-                            trigger_motion,
-                            trigger_job,
+                            target_joint,
+                            stream_to_plc,
+                            write_rate_hz,
+                            ros_control_enabled,
                             ads_configuration);
         runtime_log.write("VALIDATED " + std::to_string(trajectory.size()) + " points");
 
-        if (!upload_to_plc) {
+        if (!stream_to_plc) {
             result.status = "validated";
             writeResultYaml(experiment_directory + "/result.yaml", result);
             runtime_log.write("COMPLETED dry-run without ADS connection");
@@ -555,24 +563,22 @@ int main(int argc, char** argv) {
         }
 
         runtime_log.write("CONNECTING to ADS");
-        TrajectoryUploader uploader(ads_configuration);
-        uploader.connect();
-        const std::array<double, kPlcAxisCount> hold_positions =
-            uploader.readCurrentPositions();
-        runtime_log.write("UPLOADING trajectory with non-target axes held at current position");
-        uploader.upload(trajectory,
-                        static_cast<std::size_t>(target_axis),
-                        hold_positions);
-        result.uploaded_last_index = uploader.readUploadedLastIndex();
-        runtime_log.write("UPLOADED and verified PLC trajectory size");
-
-        if (!trigger_motion) {
-            result.status = "uploaded_not_triggered";
-            result.final_current_job = uploader.readCurrentJob();
-            writeResultYaml(experiment_directory + "/result.yaml", result);
-            runtime_log.write("COMPLETED upload-only mode; CurrentJob was not written");
-            return 0;
+        HandTrajectoryStreamer streamer(ads_configuration);
+        streamer.connect();
+        if (ros_control_enabled) {
+            streamer.enableRosControl();
+            runtime_log.write("ROSControl enabled on the PLC");
         }
+        const std::array<float, kHandChannelCount> hold_targets =
+            streamer.readCurrentTargets();
+        for (std::size_t channel = 0; channel < kHandChannelCount; ++channel) {
+            if (!std::isfinite(hold_targets[channel])) {
+                throw std::runtime_error(
+                    "PLC reported a non-finite value in the hand target array");
+            }
+        }
+        runtime_log.write(
+            "CONNECTED; non-excited hand channels hold the current MAIN.ROS_A values");
 
         std::string pose_topic;
         std::string joint_topic;
@@ -588,10 +594,7 @@ int main(int argc, char** argv) {
         double data_stale_timeout_s = 1.0;
         double pre_roll_s = 2.0;
         double post_roll_s = 2.0;
-        double current_job_poll_rate_hz = 50.0;
-        double start_timeout_s = 5.0;
         double maximum_runtime_s = 600.0;
-        int completion_debounce_count = 3;
         private_node.param("logging/subscriber_queue_size",
                            subscriber_queue_size,
                            subscriber_queue_size);
@@ -606,22 +609,13 @@ int main(int argc, char** argv) {
         private_node.param("logging/flush_interval", flush_interval, flush_interval);
         private_node.param("execution/pre_roll_s", pre_roll_s, pre_roll_s);
         private_node.param("execution/post_roll_s", post_roll_s, post_roll_s);
-        private_node.param("execution/current_job_poll_rate_hz",
-                           current_job_poll_rate_hz,
-                           current_job_poll_rate_hz);
-        private_node.param("execution/start_timeout_s", start_timeout_s, start_timeout_s);
         private_node.param("execution/maximum_runtime_s",
                            maximum_runtime_s,
                            maximum_runtime_s);
-        private_node.param("execution/completion_debounce_count",
-                           completion_debounce_count,
-                           completion_debounce_count);
 
         if (subscriber_queue_size <= 0 || sync_queue_size <= 0 ||
             data_ready_timeout_s <= 0.0 || data_stale_timeout_s <= 0.0 ||
-            current_job_poll_rate_hz <= 0.0 ||
-            start_timeout_s <= 0.0 || maximum_runtime_s <= 0.0 ||
-            completion_debounce_count <= 0 || pre_roll_s < 0.0 || post_roll_s < 0.0) {
+            maximum_runtime_s <= 0.0 || pre_roll_s < 0.0 || post_roll_s < 0.0) {
             throw std::invalid_argument("logging or execution timing parameters are invalid");
         }
 
@@ -650,58 +644,68 @@ int main(int argc, char** argv) {
 
         recorder->start(experiment_directory + "/recorded_data.csv");
         recorder->setState("PRE_ROLL");
-        recorder->setCurrentJob(uploader.readCurrentJob());
+        recorder->setCurrentJob(streamer.readCurrentJob());
         runtime_log.write("PRE_ROLL recording started");
         if (!waitForDuration(pre_roll_s, *recorder, data_stale_timeout_s)) {
             throw std::runtime_error("ROS shutdown during pre-roll");
         }
 
-        recorder->setState("TRIGGERING");
-        runtime_log.write("TRIGGERING CurrentJob=" + std::to_string(trigger_job));
-        const ros::Time trigger_time = ros::Time::now();
-        recorder->setTriggerTime(trigger_time);
-        uploader.trigger(trigger_job);
+        const std::size_t point_count = trajectory.size();
+        const std::size_t stream_channel = static_cast<std::size_t>(target_joint);
+        recorder->setState("STREAMING");
+        const ros::Time stream_start = ros::Time::now();
+        recorder->setTriggerTime(stream_start);
+        streamer.writeSample(stream_channel, static_cast<float>(trajectory[0].target));
+        recorder->setCommandTarget(trajectory[0].target);
+        std::size_t last_written_index = 0;
+        result.written_points = 1;
+        runtime_log.write("STREAMING " + std::to_string(point_count) + " points at " +
+                          std::to_string(write_rate_hz) + " Hz");
 
-        CurrentJobMonitor current_job_monitor(
-            trigger_job, static_cast<std::size_t>(completion_debounce_count));
-        const ros::WallTime start_deadline =
-            ros::WallTime::now() + ros::WallDuration(start_timeout_s);
         const ros::WallTime runtime_deadline =
             ros::WallTime::now() + ros::WallDuration(maximum_runtime_s);
-        ros::WallRate poll_rate(current_job_poll_rate_hz);
-        bool completed = false;
+        ros::WallRate write_rate(write_rate_hz);
+        const double sample_period_s = 1.0 / trajectory_parameters.sample_rate_hz;
 
-        while (ros::ok() && ros::WallTime::now() < runtime_deadline) {
+        while (ros::ok()) {
             requireRecorderHealthy(*recorder, data_stale_timeout_s);
-            const std::int16_t current_job = uploader.readCurrentJob();
-            result.final_current_job = current_job;
-            recorder->setCurrentJob(current_job);
-            const JobState job_state = current_job_monitor.update(current_job);
 
-            if (current_job_monitor.runningConfirmed()) {
-                recorder->setState("RUNNING");
-            } else if (ros::WallTime::now() >= start_deadline) {
-                throw std::runtime_error("PLC did not enter CurrentJob=114 before timeout");
+            // Sample-and-hold playback: derive the trajectory index from the
+            // elapsed time so write-rate jitter never accumulates phase error.
+            double elapsed_s = (ros::Time::now() - stream_start).toSec();
+            if (elapsed_s < 0.0) {
+                // Guard against wall-clock steps backwards (e.g. NTP sync).
+                elapsed_s = 0.0;
+            }
+            std::size_t target_index =
+                static_cast<std::size_t>(elapsed_s / sample_period_s + 0.5);
+            if (target_index >= point_count) {
+                target_index = point_count - 1;
+            }
+            if (target_index != last_written_index) {
+                streamer.writeSample(stream_channel,
+                                     static_cast<float>(trajectory[target_index].target));
+                recorder->setCommandTarget(trajectory[target_index].target);
+                last_written_index = target_index;
+                result.written_points = last_written_index + 1;
             }
 
-            if (job_state == JobState::COMPLETED) {
-                completed = true;
+            const std::int16_t current_job = streamer.readCurrentJob();
+            recorder->setCurrentJob(current_job);
+            result.final_current_job = current_job;
+
+            if (last_written_index == point_count - 1) {
                 break;
             }
-            poll_rate.sleep();
-        }
-
-        result.running_confirmed = current_job_monitor.runningConfirmed();
-        if (!completed) {
-            if (!ros::ok()) {
-                throw std::runtime_error("ROS shutdown before the trajectory completed");
+            if (ros::WallTime::now() >= runtime_deadline) {
+                throw std::runtime_error(
+                    "maximum runtime exceeded before the stream finished");
             }
-            throw std::runtime_error(
-                "maximum runtime exceeded while CurrentJob remained active");
+            write_rate.sleep();
         }
 
         recorder->setState("POST_ROLL");
-        runtime_log.write("POST_ROLL started after CurrentJob changed from 114");
+        runtime_log.write("POST_ROLL started after the last trajectory point was written");
         if (!waitForDuration(post_roll_s, *recorder, data_stale_timeout_s)) {
             throw std::runtime_error("ROS shutdown during post-roll");
         }
@@ -709,6 +713,7 @@ int main(int argc, char** argv) {
         recorder->stop();
         result.recorded_rows = recorder->rowCount();
         result.maximum_sync_error_s = recorder->maximumSyncError();
+        result.final_current_job = streamer.readCurrentJob();
         result.status = "completed";
         writeResultYaml(experiment_directory + "/result.yaml", result);
         runtime_log.write("COMPLETED one-shot experiment");

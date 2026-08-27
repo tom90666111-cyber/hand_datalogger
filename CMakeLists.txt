@@ -85,7 +85,6 @@ target_link_libraries(data_logger ${catkin_LIBRARIES})
 add_executable(single_experiment_manager src/single_experiment_manager.cpp)
 target_link_libraries(single_experiment_manager
   trajectory_generator
-  trajectory_uploader
   hand_streamer
   libadscxx
   ${catkin_LIBRARIES}

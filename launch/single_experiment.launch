@@ -1,5 +1,5 @@
 <launch>
-  <!-- Safe defaults never connect to ADS or trigger motion. -->
+  <!-- Safe defaults never connect to ADS or move the hand. -->
   <arg name="start_pipeline" default="false"/>
   <arg name="waveform" default="sine"/>
   <arg name="frequency_hz" default="0.5"/>
@@ -8,13 +8,21 @@
   <arg name="phase_rad" default="0.0"/>
   <arg name="duration_s" default="10.0"/>
   <arg name="sample_rate_hz" default="200.0"/>
-  <arg name="target_axis" default="12"/>
+  <!-- Excited hand channel 0-15; all other channels hold the PLC value. -->
+  <arg name="target_joint" default="0"/>
   <arg name="limits_enabled" default="false"/>
   <arg name="minimum_value" default="0.0"/>
   <arg name="maximum_value" default="0.0"/>
   <arg name="maximum_step" default="0.0"/>
-  <arg name="upload_to_plc" default="false"/>
-  <arg name="trigger_motion" default="false"/>
+  <!-- stream_to_plc=true performs real-time writes to MAIN.ROS_A (motion!). -->
+  <arg name="stream_to_plc" default="false"/>
+  <arg name="write_rate_hz" default="50.0"/>
+  <arg name="ros_control" default="true"/>
+  <!-- ADS connection: empty by default, must be provided before streaming. -->
+  <arg name="remote_ip" default=""/>
+  <arg name="remote_ams_net_id" default=""/>
+  <arg name="local_ams_net_id" default=""/>
+  <arg name="port" default="851"/>
   <arg name="experiment_name" default="single_experiment"/>
   <arg name="output_root" default="$(env HOME)/.ros/hand_datalogger"/>
 
@@ -36,15 +44,22 @@
     <param name="trajectory/phase_rad" value="$(arg phase_rad)"/>
     <param name="trajectory/duration_s" value="$(arg duration_s)"/>
     <param name="trajectory/sample_rate_hz" value="$(arg sample_rate_hz)"/>
-    <param name="trajectory/target_axis" value="$(arg target_axis)"/>
+    <param name="trajectory/target_joint" value="$(arg target_joint)"/>
 
     <param name="safety/limits_enabled" value="$(arg limits_enabled)"/>
     <param name="safety/minimum_value" value="$(arg minimum_value)"/>
     <param name="safety/maximum_value" value="$(arg maximum_value)"/>
     <param name="safety/maximum_step" value="$(arg maximum_step)"/>
 
-    <param name="execution/upload_to_plc" value="$(arg upload_to_plc)"/>
-    <param name="execution/trigger_motion" value="$(arg trigger_motion)"/>
+    <param name="execution/stream_to_plc" value="$(arg stream_to_plc)"/>
+    <param name="execution/write_rate_hz" value="$(arg write_rate_hz)"/>
+    <param name="execution/ros_control" value="$(arg ros_control)"/>
+
+    <param name="ads/remote_ip" value="$(arg remote_ip)"/>
+    <param name="ads/remote_ams_net_id" value="$(arg remote_ams_net_id)"/>
+    <param name="ads/local_ams_net_id" value="$(arg local_ams_net_id)"/>
+    <param name="ads/port" value="$(arg port)"/>
+
     <param name="output/experiment_name" value="$(arg experiment_name)"/>
     <param name="output/root_directory" value="$(arg output_root)"/>
   </node>
