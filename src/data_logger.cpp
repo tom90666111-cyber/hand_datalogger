@@ -59,7 +59,7 @@ int main(int argc, char *argv[]){
     ros::Subscriber sub_MDIP = nh.subscribe("/twincat/joint_states", 1, mdipCallback);
 
     //rosrun twincat_talker data_logger ori_data1.txt
-    std::string filename = "JointAngleData/ori_data1.txt";
+    std::string filename = "data/recordings/ori_data1.txt";
     if (argc > 1) {
         filename = argv[1];  // 从命令行读取
     }
