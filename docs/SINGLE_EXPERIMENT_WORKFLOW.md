@@ -1,24 +1,30 @@
-# 单次轨迹自动采集使用说明
+# 单次轨迹自动采集使用说明（实时流式写入）
 
-## 1. 安全说明
+## 1. 写入方式与安全说明
 
-新节点默认只生成轨迹：
+本管线通过**实时流式写入**驱动灵巧手：ROS 节点按 `write_rate_hz`（默认 50 Hz）逐点写
+`MAIN.ROS_A`（16 通道手部目标值），每次写入同时置 `CurrentJob=210` 触发手部运动，
+与 `teleoperation` 节点的写入方法一致。轨迹不再预上传到 `MyTRAJ` 数组，也不使用
+`CurrentJob=114` 轨迹触发。
+
+节点默认只生成轨迹：
 
 ```yaml
-upload_to_plc: false
-trigger_motion: false
+stream_to_plc: false
 ```
 
-默认模式不会建立 ADS 连接。不要跳过“离线生成 → 只上传 → 短轨迹触发”的验证顺序。
-
-当前没有配置 PLC 停止变量。ROS 节点超时或退出不能保证停止已经开始的 PLC 运动。第一次触发必须满足：
+默认模式不会建立 ADS 连接。`stream_to_plc:=true` 即开始真实运动（流式写入本身就是
+运动），没有"只上传不触发"的中间档位。第一次实机流式必须满足：
 
 - 急停可用；
 - 操作者在现场；
 - 工作空间清空；
 - 使用短时、低频、小幅值轨迹；
-- 明确轨迹单位和限位；
-- 已验证非目标轴保持值与 PLC 轨迹数组单位一致。
+- 明确轨迹单位（`MAIN.ROS_A` 手部目标值单位）和限位；
+- 已确认 ADS 地址与 NetId 参数正确（配置默认留空，防止误连）。
+
+连接后节点会写 `MAIN.ROSControl=true`（可用 `execution/ros_control` 关闭该动作），
+使 PLC 接受 ROS 手部目标。该开关在实验结束后保持 true，不自动恢复。
 
 ## 2. 构建
 
@@ -73,12 +79,12 @@ square
 | 参数 | 含义 |
 |---|---|
 | `frequency_hz` | 波形频率 |
-| `amplitude` | 振幅，单位与 PLC 轨迹数组一致 |
-| `offset` | 偏置，单位与 PLC 轨迹数组一致 |
+| `amplitude` | 振幅，单位为 `MAIN.ROS_A` 手部目标值 |
+| `offset` | 偏置，单位为 `MAIN.ROS_A` 手部目标值 |
 | `phase_rad` | 初始相位（弧度） |
 | `duration_s` | 单次轨迹时长 |
 | `sample_rate_hz` | 轨迹采样率 |
-| `target_axis` | PLC 轨迹数组目标轴，范围 0～15 |
+| `target_joint` | 激励的手部通道，范围 0～15 |
 
 点数为：
 
@@ -86,11 +92,12 @@ square
 round(duration_s × sample_rate_hz) + 1
 ```
 
-点数不能超过 60001。
+点数不能超过 60001。只有 `target_joint` 指定的通道按轨迹运动，其余 15 个通道在整场
+实验中保持连接时从 PLC 读到的 `MAIN.ROS_A` 当前值。
 
 ## 5. 安全校验
 
-PLC 上传要求：
+流式写入要求：
 
 ```text
 limits_enabled=true
@@ -104,61 +111,46 @@ maximum_value
 maximum_step
 ```
 
-任何目标点越界、相邻变化过大、出现 NaN/Inf 或点数超限时，节点都会在 ADS 连接前拒绝执行。
+限位单位为 `MAIN.ROS_A` 手部目标值。任何目标点越界、相邻变化过大、出现 NaN/Inf 或
+点数超限时，节点都会在 ADS 连接前拒绝执行。连接后还会回读 `MAIN.ROS_A` 校验全部
+通道值有限。
 
-## 6. 只上传，不触发
+## 6. 实时流式采集
 
-先确认 `config/single_experiment.yaml` 中的 ADS 地址和 PLC 变量名与实际工程一致，然后执行：
-
-```bash
-roslaunch twincat_talker single_experiment.launch \
-  waveform:=sine frequency_hz:=0.2 amplitude:=0.5 offset:=10.0 \
-  duration_s:=5.0 sample_rate_hz:=200.0 target_axis:=12 \
-  limits_enabled:=true minimum_value:=9.0 maximum_value:=11.0 maximum_step:=0.05 \
-  upload_to_plc:=true trigger_motion:=false \
-  experiment_name:=upload_only_test
-```
-
-该模式会：
-
-1. 读取 `VariableMAIN.CurrentPositionReal`；
-2. 目标轴使用生成轨迹；
-3. 其他 15 个轴使用上传前当前位置；
-4. 写入 `MyTRAJ.database_read_LREAL2`；
-5. 写入并回读 `MyTRAJ.SIZE_POS_TRAJ`；
-6. 不写 `VariableMAIN.CurrentJob`。
-
-## 7. 完整自动采集
-
-在只上传验证通过后运行：
+先确认 ADS 地址，然后执行：
 
 ```bash
 roslaunch twincat_talker single_experiment.launch \
   start_pipeline:=true \
   waveform:=sine frequency_hz:=0.2 amplitude:=0.5 offset:=10.0 \
-  duration_s:=5.0 sample_rate_hz:=200.0 target_axis:=12 \
+  duration_s:=5.0 sample_rate_hz:=200.0 target_joint:=3 \
   limits_enabled:=true minimum_value:=9.0 maximum_value:=11.0 maximum_step:=0.05 \
-  upload_to_plc:=true trigger_motion:=true \
-  experiment_name:=short_motion_test
+  stream_to_plc:=true write_rate_hz:=50.0 \
+  remote_ip:=<PLC_IP> remote_ams_net_id:=<PLC_NETID> local_ams_net_id:=<LOCAL_NETID> \
+  experiment_name:=hand_stream_test
 ```
 
 执行顺序：
 
 ```text
 生成并校验
-  → 上传并回读点数
+  → 连接 ADS
+  → 写 ROSControl=true
+  → 读取当前 MAIN.ROS_A 作为非激励通道保持值
   → 等待 /optitrack/pose1
   → 等待 /twincat/joint_states
   → 记录 PRE_ROLL
-  → 写 CurrentJob=114
-  → 确认读取到 CurrentJob==114
-  → 记录 RUNNING
-  → 连续检测 CurrentJob!=114
+  → 按 write_rate_hz 逐点写 MAIN.ROS_A + 置 CurrentJob=210
+  → 最后一点写入完成
   → 记录 POST_ROLL
   → 关闭文件
 ```
 
-## 8. 输出文件
+写入采用**采样保持**方式：每拍根据流逝时间换算轨迹索引
+（`index = elapsed × sample_rate_hz`），写入频率与轨迹采样率解耦，写入节拍抖动不会
+累积相位误差。轨迹播完后 `MAIN.ROS_A` 保持在最后一点，**不自动回零**。
+
+## 7. 输出文件
 
 默认目录：
 
@@ -183,32 +175,25 @@ result.yaml
 Pose 时间
 JointState 时间
 同步误差
-实验状态
+实验状态（PRE_ROLL / STREAMING / POST_ROLL）
 CurrentJob
 OptiTrack XYZ 和四元数
-两个目标关节位置
+两个目标关节位置（mcp、pip）
+当拍写入的指令值（cmd_target；进入流式前为 NaN）
 ```
 
-## 9. CurrentJob 判断
+## 8. CurrentJob 的角色
 
-已采用以下规则：
+`CurrentJob=210` 在每拍写入时随 `MAIN.ROS_A` 一起写给 PLC（与 teleoperation 一致），
+节点运行期间只读取并记录它用于诊断，**不再依赖 CurrentJob 判断运动开始或结束**——
+流式写入的起止由 ROS 侧完全掌握。
 
-```text
-CurrentJob==114：运行中
-CurrentJob!=114：结束
-```
+## 9. 已知限制
 
-为避免触发前的非 114 状态被误判为完成，必须先确认至少一次 `CurrentJob==114`。完成状态默认连续确认 3 次。
-
-如果触发后一直未读到 114，节点按启动超时失败；如果长时间保持 114，则按最大运行时间超时失败。
-
-运行期间如果同步数据超过 `logging/data_stale_timeout_s` 未更新，或者 CSV 输出流发生写入错误，节点会停止 ROS 侧记录并将实验标记为失败。当前版本不会因此自动写 PLC 停止命令。
-
-## 10. 已知限制
-
-- 尚未接入 PLC 主动停止变量；
-- 尚未支持循环和分段上传；
-- 尚未支持多轴独立波形；
-- 轨迹执行结束只依据 `CurrentJob`；
+- 尚未接入 PLC 主动停止变量；节点超时或退出不能停止已开始的 PLC 运动；
+- PLC 对 50 Hz 连续"写 ROS_A + 置 210"的响应行为尚未实机验证，首次使用必须短时、
+  低幅验证；
+- 尚未支持多通道独立波形和循环/分段激励；
+- 轨迹播完后手部保持在最后一点，回零需另行显式操作；
 - `robot.launch` 中仍使用现有硬编码 TwinCAT/VRPN 参数，实机前必须核对；
 - 本功能不能替代 PLC 侧限位、速度限制和急停逻辑。

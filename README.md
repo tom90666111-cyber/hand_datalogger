@@ -222,9 +222,9 @@ variable_to_write = 12.0;
 - **用途**：`main.cc` 的历史备份版本
 - **功能**：每 10 秒向 `MAIN.myFloatVAR` 写入固定值 12.0 的简单演示，连接至 `172.17.64.1`
 
-## 单次轨迹自动采集（实验功能）
+## 单次轨迹自动采集（实时流式写入）
 
-`single_experiment_manager` 可以根据少量参数生成一段单轴轨迹，并按顺序完成安全校验、可选 ADS 上传、可选 PLC 触发以及 OptiTrack/关节角同步记录。
+`single_experiment_manager` 根据少量参数生成一段单通道手部轨迹，并按顺序完成安全校验、实时流式写入 PLC 以及 OptiTrack/关节角同步记录。写入方式与 `teleoperation` 节点一致：按 `write_rate_hz`（默认 50 Hz）逐点写 `MAIN.ROS_A` 并置 `CurrentJob=210`，不使用 `MyTRAJ` 轨迹数组和 `CurrentJob=114`。
 
 ### 默认安全模式
 
@@ -248,32 +248,24 @@ roslaunch twincat_talker single_experiment.launch \
 
 包含生成轨迹、实际参数、运行日志和结果文件。
 
-### 上传但不触发运动
+### 实时流式采集（真实运动）
 
-上传前必须明确提供安全限位：
+`stream_to_plc:=true` 即开始流式写入，**没有"只上传不触发"的中间档位**。必须在命令中显式提供安全限位（单位为 `MAIN.ROS_A` 手部目标值）和 ADS 连接参数（默认留空，防止误连）：
 
 ```bash
 roslaunch twincat_talker single_experiment.launch \
-  waveform:=sine frequency_hz:=0.5 amplitude:=1.0 offset:=10.0 \
-  duration_s:=10.0 sample_rate_hz:=200.0 target_axis:=12 \
-  limits_enabled:=true minimum_value:=8.0 maximum_value:=12.0 maximum_step:=0.1 \
-  upload_to_plc:=true trigger_motion:=false
+  start_pipeline:=true \
+  waveform:=sine frequency_hz:=0.2 amplitude:=0.5 offset:=10.0 \
+  duration_s:=5.0 sample_rate_hz:=200.0 target_joint:=3 \
+  limits_enabled:=true minimum_value:=9.0 maximum_value:=11.0 maximum_step:=0.05 \
+  stream_to_plc:=true write_rate_hz:=50.0 \
+  remote_ip:=<PLC_IP> remote_ams_net_id:=<PLC_NETID> local_ams_net_id:=<LOCAL_NETID> \
+  experiment_name:=hand_stream_test
 ```
 
-该模式会写入 PLC 轨迹数组，但不会写入 `CurrentJob=114`。
+执行流程：连接 ADS → 写 `ROSControl=true` → 读当前 `MAIN.ROS_A` 作为非激励通道保持值 → 等待同步数据 → PRE_ROLL → 按 50 Hz 逐点写入（每拍同时置 210）→ 最后一点 → POST_ROLL。轨迹播完后手部保持在最后一点，不自动回零；结束判断在 ROS 侧，不依赖 `CurrentJob`（仅记录用于诊断）。`recorded_data.csv` 中 `cmd_target` 列记录每拍写入的指令值。
 
-### 完整自动实验
-
-实机短轨迹验证完成后，才允许额外设置：
-
-```text
-start_pipeline:=true
-trigger_motion:=true
-```
-
-管理节点只有在收到同步的 `/optitrack/pose1` 和 `/twincat/joint_states` 后才会触发。确认 `CurrentJob==114` 后持续记录，连续检测到 `CurrentJob!=114` 后结束，并在结束前后记录可配置的 pre-roll/post-roll 数据。
-
-详细参数、安全限制和分级验收流程见：
+详细参数、安全限制和已知限制见：
 
 ```text
 docs/SINGLE_EXPERIMENT_WORKFLOW.md
