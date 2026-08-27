@@ -34,8 +34,7 @@ __pycache__/
 *.log
 
 # Duplicate archives of text data directories
-src/JointAngleData.zip
-src/JointAngleData/**/*.zip
+data/**/*.zip
 
 # Generated experiment output
 data/output/
