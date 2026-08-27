@@ -49,7 +49,7 @@ rosrun twincat_talker twincat_node
 ### 3. 启动数据记录节点
 
 ```bash
-rosrun twincat_talker data_logger JointAngleData/ori_data1.txt
+rosrun twincat_talker data_logger data/recordings/ori_data1.txt
 ```
 
 同时订阅 VRPN 位姿（`/vrpn_client/RigidBody1/pose`）和关节角（`/twincat/joint_states`），将同步数据以 CSV 格式写入指定文件。
@@ -171,7 +171,7 @@ variable_to_write = 12.0;
 - **依赖 ADS**：否
 - **使用方式**：
   ```bash
-  rosrun twincat_talker data_logger JointAngleData/ori_data1.txt
+  rosrun twincat_talker data_logger data/recordings/ori_data1.txt
   ```
 - **功能**：以 100Hz 循环，将时间戳、XYZ 位置、四元数姿态、MCP/PIP 关节角写入指定 CSV 文件，每行立即刷盘
 
@@ -217,10 +217,6 @@ variable_to_write = 12.0;
   - 手部关节展开：16 根腱绳 → 40 个 URDF 关节状态输出（含指尖角度计算）
   - 关节限位保护（硬编码阈值）
 - **依赖**：同 `teleoperation.cpp`，需 `../include/math.hpp`
-
-#### `main_bk.cc`
-- **用途**：`main.cc` 的历史备份版本
-- **功能**：每 10 秒向 `MAIN.myFloatVAR` 写入固定值 12.0 的简单演示，连接至 `172.17.64.1`
 
 ## 单次轨迹自动采集（实时流式写入）
 
@@ -269,6 +265,5 @@ roslaunch twincat_talker single_experiment.launch \
 
 ```text
 docs/SINGLE_EXPERIMENT_WORKFLOW.md
-docs/SINGLE_EXPERIMENT_IMPLEMENTATION_PLAN.md
 docs/HARDWARE_SAFETY_POLICY.md
 ```
